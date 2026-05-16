@@ -2,8 +2,6 @@
 
 **Bhasha-Stream** is a production-grade, asynchronous voice-to-voice agent architecture optimized for Indian code-switched languages (Hinglish, Tanglish, etc.). It achieves sub-800ms Round-Trip Time (RTT) through a custom interleaved streaming pipeline, aggressive interruption handling, and GPU-accelerated inference.
 
-Designed for deployment on Kubernetes with NVIDIA GPU support, this system demonstrates elite systems engineering principles suitable for high-scale SRE environments.
-
 ## Architecture Overview
 
 The core of Bhasha-Stream is a **non-blocking, event-driven state machine** that decouples audio ingestion, speech detection, transcription, generation, and synthesis into parallel pipelines.

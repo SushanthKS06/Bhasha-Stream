@@ -38,7 +38,7 @@ The core of Bhasha-Stream is a **non-blocking, event-driven state machine** that
                                     +------------------| TTS Service         |
                                                        | (MeloTTS Chunked)   |
                                                        +---------------------+
-	```
+```
 
 ### Key Features
 

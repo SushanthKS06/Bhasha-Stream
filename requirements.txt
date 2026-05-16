@@ -1,0 +1,31 @@
+# Core Web Framework
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+websockets==12.0
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# Audio & ML Inference
+numpy==1.26.4
+scipy==1.13.0
+onnxruntime-gpu==1.18.0
+faster-whisper==1.0.3
+ctranslate2==4.3.1
+
+# LLM Client
+httpx==0.27.0
+openai==1.30.1
+
+# TTS (Mock/Stubs for now, real MeloTTS requires specific torch setup)
+# In production, this would be pinned to a specific commit or wheel
+melo-tts==0.1.0 
+
+# Testing
+pytest==8.2.0
+pytest-asyncio==0.23.6
+pytest-cov==5.0.0
+httpx==0.27.0
+
+# Utilities
+aiofiles==24.1.0
+loguru==0.7.2

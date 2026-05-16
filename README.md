@@ -11,7 +11,7 @@ The core of Bhasha-Stream is a **non-blocking, event-driven state machine** that
 ```
 +----------------+      +---------------------+      +------------------+
 |   Client       |      |   FastAPI Gateway   |      |  Orchestrator    |
-| (Browser/Mob)  |<---->| (WebSocket /v1/stream)|<---->| (State Machine)  |
+| (Browser/Mob)  |<---->|(WebSocket/v1/stream)|<--->| (State Machine)   |
 +----------------+      +----------+----------+      +--------+---------+
                                    |                          |
                                    | Binary PCM Frames        |

@@ -8,37 +8,37 @@ Designed for deployment on Kubernetes with NVIDIA GPU support, this system demon
 
 The core of Bhasha-Stream is a **non-blocking, event-driven state machine** that decouples audio ingestion, speech detection, transcription, generation, and synthesis into parallel pipelines.
 
-```text
+```
 +----------------+      +---------------------+      +------------------+
 |   Client       |      |   FastAPI Gateway   |      |  Orchestrator    |
 | (Browser/Mob)  |<---->| (WebSocket /v1/stream)|<---->| (State Machine)  |
 +----------------+      +----------+----------+      +--------+---------+
-|                          |
-| Binary PCM Frames        |
-v                          v
-+------------------+      +---------------------+
-| Inbound Queue    |----->| VAD Service (Silero)|
-| (AsyncIO)        |      | (30ms Windows)      |
-+------------------+      +----------+----------+
-| Speech Detected?
-v
-+------------------+      +---------------------+
-| Outbound Queue   |<-----| STT Service         |
-| (Audio Chunks)   |      | (Faster-Whisper)    |
-+--------^---------+      +----------+----------+
-|                          | Text
-|                             v
-|                  +---------------------+
-|                  | LLM Service         |
-|                  | (vLLM Streaming)    |
-|                  +----------+----------+
-|                             | Tokens
-|                             v
-|                  +---------------------+
-+------------------| TTS Service         |
-| (MeloTTS Chunked)   |
-+---------------------+
-```
+                                   |                          |
+                                   | Binary PCM Frames        |
+                                   v                          v
+                           +------------------+      +---------------------+
+                           | Inbound Queue    |----->| VAD Service (Silero)|
+                           | (AsyncIO)        |      | (30ms Windows)      |
+                           +------------------+      +----------+----------+
+                                                                | Speech Detected?
+                                                                v
+                           +------------------+      +---------------------+
+                           | Outbound Queue   |<-----| STT Service         |
+                           | (Audio Chunks)   |      | (Faster-Whisper)    |
+                           +--------^---------+      +----------+----------+
+                                    |                          | Text
+                                    |                          v
+                                    |                  +---------------------+
+                                    |                  | LLM Service         |
+                                    |                  | (vLLM Streaming)    |
+                                    |                  +----------+----------+
+                                    |                             | Tokens
+                                    |                             v
+                                    |                  +---------------------+
+                                    +------------------| TTS Service         |
+                                                       | (MeloTTS Chunked)   |
+                                                       +---------------------+
+	```
 
 ### Key Features
 

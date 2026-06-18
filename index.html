@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bhasha-Stream Tester</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1a1a1a; color: white; }
+        button { padding: 15px 30px; font-size: 20px; border-radius: 8px; border: none; background: #007bff; color: white; cursor: pointer; margin-bottom: 20px; }
+        button:hover { background: #0056b3; }
+        #status { font-size: 18px; color: #aaa; text-align: center; max-width: 80%; line-height: 1.5; margin-bottom: 20px; }
+        #transcriptBox { width: 80%; max-width: 800px; height: 300px; overflow-y: auto; background: #2a2a2a; padding: 20px; border-radius: 8px; border: 1px solid #444; font-size: 18px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; }
+        #transcriptBox p { margin: 0; }
+        #micLevel { width: 80%; max-width: 400px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🎤 Bhasha-Stream Tester</h1>
+    <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 20px;">
+        <button id="startBtn">Connect & Start Listening</button>
+        <button id="stopBtn" style="display: none; background: #e74c3c;">Stop & Get Reply</button>
+    </div>
+    <meter id="micLevel" min="0" max="100" value="0"></meter>
+    <div id="status">Ready. Click Connect to begin.</div>
+    <div id="transcriptBox"></div>
+
+    <script>
+        document.getElementById("startBtn").onclick = async () => {
+            const status = document.getElementById("status");
+            status.innerText = "Connecting to server...";
+            status.style.color = "#aaa";
+
+            const ws = new WebSocket("ws://" + window.location.host + "/v1/stream");
+            ws.binaryType = "arraybuffer";
+
+            ws.onopen = () => {
+                if (status.innerText.includes("Connecting")) {
+                    status.innerText = "✅ WebSocket connected! Waiting for microphone access...";
+                }
+            };
+
+            ws.onerror = () => {
+                status.innerText = "❌ Connection failed. Check uvicorn logs.";
+                status.style.color = "#ff4444";
+            };
+
+            try {
+                // Request microphone first
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+                
+                startBtn.style.display = "none";
+                stopBtn.style.display = "inline-block";
+                
+                let isListening = true;
+                const resumeBtn = document.createElement("button");
+                resumeBtn.innerText = "▶ Resume Listening";
+                resumeBtn.style.display = "none";
+                document.querySelector("div").appendChild(resumeBtn);
+
+                resumeBtn.onclick = () => {
+                    isListening = true;
+                    resumeBtn.style.display = "none";
+                    stopBtn.style.display = "inline-block";
+                    status.innerText = "🟢 Listening...";
+                    status.style.color = "#4caf50";
+                };
+
+                stopBtn.onclick = () => {
+                    if (ws && ws.readyState === 1) {
+                        ws.send("STOP");
+                        isListening = false;
+                        status.innerText = "⏳ Processing your speech...";
+                        status.style.color = "#ffa500";
+                        stopBtn.style.display = "none";
+                        resumeBtn.style.display = "inline-block";
+                    }
+                };
+
+                // Initialize audio context
+                const audioCtx = new AudioContext({ sampleRate: 16000 });
+                if (audioCtx.state === "suspended") {
+                    await audioCtx.resume();
+                }
+
+                const source = audioCtx.createMediaStreamSource(stream);
+                const proc = audioCtx.createScriptProcessor(4096, 1, 1);
+                
+                // CRITICAL: Prevent Chrome from Garbage Collecting the audio graph
+                window.audioCtx = audioCtx;
+                window.audioStream = stream;
+                window.audioSource = source;
+                window.audioNode = proc;
+
+                source.connect(proc);
+                proc.connect(audioCtx.destination);
+                
+                let sampleBuffer = [];
+                let hasLoggedAudio = false;
+                let frameCount = 0;
+                const micLevel = document.getElementById("micLevel");
+
+                proc.onaudioprocess = e => {
+                    if (!isListening) return;
+
+                    if (!hasLoggedAudio) {
+                        console.log("🎤 Audio capture started successfully!");
+                        hasLoggedAudio = true;
+                    }
+                    if (ws.readyState === 1) { // OPEN
+                        const f32 = e.inputBuffer.getChannelData(0);
+                        
+                        // Calculate volume (RMS) to update the UI meter
+                        let sum = 0;
+                        for (let i = 0; i < f32.length; i++) {
+                            sum += f32[i] * f32[i];
+                            // Convert float32 [-1.0, 1.0] to int16 [-32768, 32767]
+                            sampleBuffer.push(Math.max(-32768, Math.min(32767, f32[i] * 32768)));
+                        }
+                        const rms = Math.sqrt(sum / f32.length);
+                        // Scale RMS (usually 0 to 0.1 for normal speech) up to 100
+                        micLevel.value = Math.min(100, rms * 1000);
+
+                        // Send precisely 480 samples per frame to match server VAD window
+                        while (sampleBuffer.length >= 480) {
+                            const chunk = sampleBuffer.splice(0, 480);
+                            const i16 = new Int16Array(chunk);
+                            ws.send(i16.buffer);
+                            
+                            frameCount++;
+                            if (frameCount % 100 === 0) {
+                                console.log(`Sent ${frameCount} audio frames to server...`);
+                            }
+                        }
+                    }
+                };
+
+                ws.onmessage = async e => {
+                    if (typeof e.data === "string") {
+                        const transcriptBox = document.getElementById("transcriptBox");
+                        const text = e.data;
+                        const p = document.createElement("p");
+                        
+                        if (text.startsWith("USER:")) {
+                            p.innerText = "You: " + text.replace("USER: ", "");
+                            p.style.color = "#007bff";
+                        } else if (text.startsWith("AI:")) {
+                            status.innerText = "🔊 AI is speaking...";
+                            status.style.color = "#4caf50";
+                            p.innerText = "Bhasha-Stream: " + text.replace("AI: ", "");
+                            p.style.color = "#4caf50";
+                        } else {
+                            p.innerText = text;
+                        }
+                        
+                        transcriptBox.appendChild(p);
+                        transcriptBox.scrollTop = transcriptBox.scrollHeight;
+                        return;
+                    }
+
+                    if (e.data.byteLength === 0) return; // ignore server keepalive pings
+
+                    const d = new Uint8Array(e.data);
+                    if (d.length === 4 && d.every(b => b === 0)) {
+                        status.innerText = "🛑 Interrupted! Listening again...";
+                        // Reset audio queue on interruption
+                        window.nextAudioStartTime = window.audioCtx.currentTime;
+                        return;
+                    }
+                    
+                    const i16 = new Int16Array(e.data);
+                    const f32 = Float32Array.from(i16, v => v / 32768);
+                    const buf = audioCtx.createBuffer(1, f32.length, 16000);
+                    buf.copyToChannel(f32, 0);
+                    const src = audioCtx.createBufferSource();
+                    src.buffer = buf;
+                    src.connect(audioCtx.destination);
+                    
+                    // Initialize the queue time if it doesn't exist or is in the past
+                    if (!window.nextAudioStartTime || window.nextAudioStartTime < audioCtx.currentTime) {
+                        window.nextAudioStartTime = audioCtx.currentTime;
+                    }
+                    
+                    src.start(window.nextAudioStartTime);
+                    window.nextAudioStartTime += buf.duration;
+                    
+                    status.innerText = "🔊 AI is speaking...";
+                    status.style.color = "#4caf50";
+                    
+                    // Reset status to listening when this specific chunk finishes
+                    setTimeout(() => {
+                        if (status.innerText.includes("speaking") && window.audioCtx.currentTime >= window.nextAudioStartTime - 0.1) {
+                            status.innerText = "✅ AI finished speaking. Listening to you...";
+                        }
+                    }, (window.nextAudioStartTime - audioCtx.currentTime) * 1000);
+                };
+
+                ws.onclose = () => {
+                    status.innerText = "❌ Disconnected from server.";
+                    status.style.color = "#f44336";
+                    document.getElementById("startBtn").style.display = "inline-block";
+                    document.getElementById("stopBtn").style.display = "none";
+                };
+
+                // If WebSocket is already open by the time we get mic permission
+                if (ws.readyState === 1) {
+                    status.innerText = "✅ Connected! Speak into your mic.";
+                    status.style.color = "#4caf50";
+                } else {
+                    // Overwrite onopen to update status if mic permission was granted first
+                    ws.onopen = () => {
+                        status.innerText = "✅ Connected! Speak into your mic.";
+                        status.style.color = "#4caf50";
+                    };
+                }
+
+            } catch (err) {
+                console.error(err);
+                status.innerText = "❌ Microphone access denied or failed: " + err.message + "\nPlease click the lock icon in the URL bar and allow microphone access.";
+                status.style.color = "#ff4444";
+            }
+        };
+    </script>
+</body>
+</html>

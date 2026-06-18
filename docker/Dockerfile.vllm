@@ -1,29 +1,32 @@
 # docker/Dockerfile.vllm
-# Based on official vLLM OpenAI-compatible image
+# ============================================================
+# vLLM OpenAI-compatible inference server
+# Serves Sarvam-M (or any HF model) on port 8001
+# to avoid collision with the FastAPI backend on port 8000
+# ============================================================
 FROM vllm/vllm-openai:latest
 
-# Environment variables for Hugging Face and Model Cache optimization
-ENV HF_HOME=/tmp/hf_cache \
-    VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/vllm/nccl/cuda_compat/libnccl.so.2 \
-    NCCL_P2P_DISABLE=1 \
-    TRANSFORMERS_CACHE=/tmp/hf_cache
+# Environment variables for HuggingFace model caching
+ENV HF_HOME=/app/hf_cache \
+    TRANSFORMERS_CACHE=/app/hf_cache \
+    # Disable P2P NVLink for single-GPU setups (safe to enable on multi-GPU with NVLink)
+    NCCL_P2P_DISABLE=1
 
-# Create cache directory
-RUN mkdir -p /tmp/hf_cache && chmod 777 /tmp/hf_cache
+# Create cache directory with open permissions (vllm image runs as root by default)
+RUN mkdir -p /app/hf_cache && chmod 777 /app/hf_cache
 
-# Expose vLLM default port
-EXPOSE 8000
+# Expose vLLM on port 8001 (backend port 8000 is separate — BUG-23 fix)
+EXPOSE 8001
 
-# Default command to run the server
-# Note: Model name and quantization should be passed via docker-compose or k8s args
+# Use the official vLLM entrypoint — model/args passed via docker-compose CMD override
 ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
 
-CMD [
-    "--host", "0.0.0.0",
-    "--port", "8000",
-    "--model", "sarvamai/sarvam-m",
-    "--dtype", "float16",
-    "--max-model-len", "2048",
-    "--gpu-memory-utilization", "0.90",
-    "--enforce-eager"
+CMD [ \
+    "--host", "0.0.0.0", \
+    "--port", "8001", \
+    "--model", "sarvamai/sarvam-m", \
+    "--dtype", "float16", \
+    "--max-model-len", "2048", \
+    "--gpu-memory-utilization", "0.90", \
+    "--enforce-eager" \
 ]

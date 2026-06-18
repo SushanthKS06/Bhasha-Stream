@@ -1,0 +1,105 @@
+# ============================================================
+# Bhasha-Stream — Docker Compose
+# GPU-accelerated ultra-low-latency voice AI stack
+# ============================================================
+# Prerequisites:
+#   - Docker + Docker Compose v2
+#   - NVIDIA Container Toolkit (nvidia-docker2)
+#   - GPU with ≥16GB VRAM
+#
+# Usage:
+#   cp .env.example .env   # fill in secrets
+#   docker compose up --build
+# ============================================================
+
+name: bhasha-stream
+
+services:
+
+  # ──────────────────────────────────────────────────────────
+  # vLLM Inference Engine
+  # Serves the Sarvam-M model as an OpenAI-compatible endpoint
+  # on internal port 8001 (avoids collision with backend :8000)
+  # ──────────────────────────────────────────────────────────
+  vllm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vllm
+    container_name: bhasha-stream-vllm
+    restart: unless-stopped
+    environment:
+      - HF_HOME=${HF_HOME:-/app/hf_cache}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - NCCL_P2P_DISABLE=1
+    volumes:
+      - hf_cache:/app/hf_cache
+    ports:
+      - "8001:8001"   # Expose vLLM externally for debugging (optional)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 15s
+      start_period: 120s   # Model loading can take time
+      retries: 5
+    shm_size: "2gb"       # Required for multi-GPU NCCL communication
+
+  # ──────────────────────────────────────────────────────────
+  # FastAPI Backend — Voice Pipeline Gateway
+  # ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: bhasha-stream-backend
+    restart: unless-stopped
+    environment:
+      - VLLM_ENDPOINT=http://vllm:8001/v1
+      - LLM_MODEL=${LLM_MODEL:-sarvamai/sarvam-m}
+      - LLM_API_KEY=${LLM_API_KEY:-bhasha-local-key}
+      - STT_MODEL_SIZE=${STT_MODEL_SIZE:-tiny}
+      - STT_DEVICE=${STT_DEVICE:-cuda}
+      - STT_COMPUTE_TYPE=${STT_COMPUTE_TYPE:-float16}
+      - TTS_ENGINE=${TTS_ENGINE:-melotts}
+      - TTS_LANGUAGE=${TTS_LANGUAGE:-EN}
+      - TTS_SPEAKER_ID=${TTS_SPEAKER_ID:-0}
+      - VAD_MODEL_PATH=${VAD_MODEL_PATH:-/app/models/silero_vad.onnx}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - HF_HOME=${HF_HOME:-/app/hf_cache}
+    volumes:
+      - hf_cache:/app/hf_cache
+      - models_cache:/app/models
+    ports:
+      - "8000:8000"
+    depends_on:
+      vllm:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  hf_cache:
+    driver: local
+  models_cache:
+    driver: local
+
+networks:
+  default:
+    name: bhasha-stream-net

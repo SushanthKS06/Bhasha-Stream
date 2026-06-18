@@ -1,63 +1,83 @@
 # docker/Dockerfile.backend
-# Stage 1: Builder
-FROM python:3.11-slim as builder
+# ============================================================
+# Stage 1: Builder — install all Python dependencies
+# ============================================================
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install build essentials only for this stage to compile C extensions (e.g., numpy, onnxruntime deps)
+# Install build essentials to compile C extensions (numpy, onnxruntime, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment to isolate dependencies and keep final image clean
+# Create isolated virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements first to leverage Docker layer caching
 COPY requirements.txt .
 
-# Install dependencies
+# Upgrade pip and install all pinned dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Runtime
-FROM python:3.11-slim as runtime
+# Install MeloTTS from source (no valid PyPI package exists)
+RUN pip install --no-cache-dir \
+    git+https://github.com/myshell-ai/MeloTTS.git
 
-# Set performance environment variables
+# ============================================================
+# Stage 2: Runtime — lean production image
+# ============================================================
+FROM python:3.11-slim AS runtime
+
+# Performance & correctness environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH"
 
-# Install runtime-only system dependencies (e.g., libsndfile for audio processing)
+# Install only runtime system dependencies
+# libsndfile1: audio file I/O (scipy/soundfile)
+# ffmpeg: audio codec support
+# curl: used by health check
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     ffmpeg \
+    curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash appuser
 
 WORKDIR /app
 
-# Copy virtual environment from builder
+# Copy virtual environment from builder (avoids reinstalling in runtime)
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy application code
+# Copy application source code
 COPY ./app ./app
 COPY ./tests ./tests
 
-# Change ownership to non-root user
-RUN chown -R appuser:appuser /app
+# Create directories for model caches (volumes will mount here)
+RUN mkdir -p /app/models /app/hf_cache && \
+    chown -R appuser:appuser /app
 
 USER appuser
 
-# Expose FastAPI port
+# Expose FastAPI WebSocket/HTTP port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(); s.connect(('localhost', 8000)); s.close()" || exit 1
+# HTTP health check — verifies the FastAPI app is actually responding,
+# not just that the TCP port is open (BUG-22 fix)
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# Entry point
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Launch uvicorn with a single worker to prevent GIL contention on
+# CPU preprocessing while delegating heavy inference to CUDA streams
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--log-level", "info"]
